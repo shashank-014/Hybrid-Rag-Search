@@ -43,9 +43,13 @@ def stream_answer(query, context, memory_text):
         temperature=0.2
     )
 
-    for chunk in llm.stream(messages):
-        if hasattr(chunk, "content") and chunk.content:
-            yield chunk.content
+    response = llm.invoke(messages)
+
+    answer_text = response.content
+
+    # simulate streaming
+    for word in answer_text.split():
+        yield word + " "
 
 
 
