@@ -1,17 +1,15 @@
 import os
 import streamlit as st
 
-from groq import BadRequestError
-from langchain_groq import ChatGroq
-from langchain_core.messages import HumanMessage, SystemMessage
+from groq import BadRequestError, Groq
 
 api_key = st.secrets.get("GROQ_API_KEY")
 
 if api_key:
     os.environ["GROQ_API_KEY"] = api_key
 
-MAX_CONTEXT_CHARS = 3500
-MAX_MEMORY_CHARS = 1200
+MAX_CONTEXT_CHARS = 2600
+MAX_MEMORY_CHARS = 800
 
 
 
@@ -41,18 +39,20 @@ Conversation History:
 If the answer is not present in the context, say you do not know.
 """
     return [
-        SystemMessage(content=system_prompt),
-        HumanMessage(content=query)
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": query},
     ]
 
 
 
-def _invoke_groq(messages):
-    llm = ChatGroq(
+def _run_completion(messages):
+    client = Groq(api_key=api_key)
+    response = client.chat.completions.create(
         model="llama3-8b-8192",
-        temperature=0.2
+        messages=messages,
+        temperature=0.2,
     )
-    return llm.invoke(messages)
+    return response.choices[0].message.content or ""
 
 
 
@@ -68,22 +68,22 @@ def stream_answer(query, context, memory_text):
     messages = _build_messages(query, context, memory_text)
 
     try:
-        response = _invoke_groq(messages)
+        answer_text = _run_completion(messages)
     except BadRequestError:
         fallback_messages = _build_messages(
             query,
-            _trim_text(context, 1800),
-            _trim_text(memory_text, 400),
+            _trim_text(context, 1400),
+            _trim_text(memory_text, 250),
         )
         try:
-            response = _invoke_groq(fallback_messages)
+            answer_text = _run_completion(fallback_messages)
         except BadRequestError:
-            yield "The Groq request was too large or invalid. Try a shorter question or index fewer sources."
+            yield "The Groq request was too large or invalid. Try a shorter question or disable web search."
             return
 
-    answer_text = response.content or "I do not know based on the available context."
+    if not answer_text:
+        answer_text = "I do not know based on the available context."
 
-    # simulate streaming for Streamlit UI
     for word in answer_text.split():
         yield word + " "
 
