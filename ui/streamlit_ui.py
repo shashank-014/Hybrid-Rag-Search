@@ -101,9 +101,9 @@ def _build_notices(route: str, use_web: bool, store) -> list[str]:
     if store is None and route in {"document", "hybrid"}:
         notices.append("Please upload documents to create the vector index.")
     if use_web and route in {"web", "hybrid"} and not get_secret("TAVILY_API_KEY"):
-        notices.append("Please configure API keys in Streamlit secrets.")
-    if not get_secret("OPENAI_API_KEY"):
-        notices.append("Please configure API keys in Streamlit secrets.")
+        notices.append("TAVILY_API_KEY is missing in Streamlit secrets. Disable web search or add the key.")
+    if not get_secret("GROQ_API_KEY"):
+        notices.append("GROQ_API_KEY is missing in Streamlit secrets.")
     return notices
 
 
@@ -330,3 +330,5 @@ def run_app() -> None:
 
     save_turn(query, answer_text)
     st.session_state.messages.append({"role": "assistant", "content": answer_text})
+
+
