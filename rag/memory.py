@@ -1,22 +1,33 @@
-from langchain_community.memory import ConversationBufferMemory
+import streamlit as st
 
 
 
-def create_memory() -> ConversationBufferMemory:
-    return ConversationBufferMemory(
-        memory_key="chat_history",
-        input_key="question",
-        output_key="answer",
-        return_messages=False,
-    )
+def create_memory():
+    """Initialize chat memory in Streamlit session state."""
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+    return st.session_state.chat_history
 
 
 
-def load_memory_text(memory: ConversationBufferMemory) -> str:
-    values = memory.load_memory_variables({})
-    return values.get("chat_history", "")
+def load_memory_text():
+    """Return conversation history as formatted text."""
+    history = st.session_state.get("chat_history", [])
+
+    memory_text = ""
+    for turn in history:
+        memory_text += f"User: {turn['user']}\nAssistant: {turn['assistant']}\n"
+
+    return memory_text
 
 
 
-def save_turn(memory: ConversationBufferMemory, question: str, answer: str) -> None:
-    memory.save_context({"question": question}, {"answer": answer})
+def save_turn(user_message, assistant_message):
+    """Save a chat turn to memory."""
+    if "chat_history" not in st.session_state:
+        st.session_state.chat_history = []
+
+    st.session_state.chat_history.append({
+        "user": user_message,
+        "assistant": assistant_message
+    })

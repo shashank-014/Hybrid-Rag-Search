@@ -45,8 +45,7 @@ def _ensure_state() -> None:
         st.session_state.messages = []
     if "uploaded_files" not in st.session_state:
         st.session_state.uploaded_files = []
-    if "conversation_memory" not in st.session_state:
-        st.session_state.conversation_memory = create_memory()
+    create_memory()
 
 
 
@@ -66,12 +65,7 @@ def _save_uploaded_files(uploaded_files: list) -> list[Path]:
 
 def _reset_chat() -> None:
     st.session_state.messages = []
-    st.session_state.conversation_memory = create_memory()
-
-
-
-def _get_memory():
-    return st.session_state.conversation_memory
+    st.session_state.chat_history = []
 
 
 
@@ -105,18 +99,17 @@ def _build_notices(route: str, use_web: bool, store) -> list[str]:
     if not _get_indexed_titles() and route in {"document", "hybrid"}:
         notices.append("The document folder is empty. Upload files and run indexing first.")
     if store is None and route in {"document", "hybrid"}:
-        notices.append("FAISS index not found yet. Upload documents and click Index Documents.")
+        notices.append("Please upload documents to create the vector index.")
     if use_web and route in {"web", "hybrid"} and not get_secret("TAVILY_API_KEY"):
-        notices.append("TAVILY_API_KEY is missing in Streamlit secrets, so web search is unavailable.")
+        notices.append("Please configure API keys in Streamlit secrets.")
     if not get_secret("OPENAI_API_KEY"):
-        notices.append("OPENAI_API_KEY is missing in Streamlit secrets, so answer generation will be limited.")
+        notices.append("Please configure API keys in Streamlit secrets.")
     return notices
 
 
 
 def _run_query(query: str, use_web: bool) -> dict[str, object]:
     store = _load_store_from_disk()
-    memory = _get_memory()
     route = route_query(query)
     rewritten = rewrite_query(query)
     notices = _build_notices(route, use_web, store)
@@ -141,7 +134,7 @@ def _run_query(query: str, use_web: bool) -> dict[str, object]:
         "web_evidence": payload["web_evidence"],
         "context": payload["context"],
         "summaries": summaries,
-        "memory_text": load_memory_text(memory),
+        "memory_text": load_memory_text(),
         "notices": notices,
     }
 
@@ -279,6 +272,7 @@ def _handle_indexing(uploaded_files: list) -> None:
 
 def run_app() -> None:
     ensure_dirs()
+    create_memory()
     _ensure_state()
     st.set_page_config(page_title="AI Advocate RAG Chatbot", layout="wide")
     _load_css()
@@ -334,5 +328,5 @@ def run_app() -> None:
         with web_tab:
             _render_web_evidence(result["web_evidence"])
 
-    save_turn(_get_memory(), query, answer_text)
+    save_turn(query, answer_text)
     st.session_state.messages.append({"role": "assistant", "content": answer_text})
