@@ -3,7 +3,7 @@ from pathlib import Path
 
 import streamlit as st
 
-from config import DATA_DIR, DELETED_DIR, ensure_dirs
+from config import DATA_DIR, DELETED_DIR, ensure_dirs, get_secret
 from indexing.chunking import chunk_documents
 from indexing.vector_store import index_documents, load_faiss_index
 from ingestion.loaders import load_sources
@@ -25,12 +25,28 @@ ROUTE_LABELS = {
 
 
 
+def _load_css() -> None:
+    with open("ui/style.css", encoding="utf-8") as file_handle:
+        st.markdown(f"<style>{file_handle.read()}</style>", unsafe_allow_html=True)
+
+
+
 def _archive_existing(path: Path) -> None:
     if not path.exists():
         return
     stamp = datetime.now().strftime("%Y-%m-%d")
     archived = DELETED_DIR / f"data_documents_{stamp}_prev_{path.name}"
     path.replace(archived)
+
+
+
+def _ensure_state() -> None:
+    if "messages" not in st.session_state:
+        st.session_state.messages = []
+    if "uploaded_files" not in st.session_state:
+        st.session_state.uploaded_files = []
+    if "conversation_memory" not in st.session_state:
+        st.session_state.conversation_memory = create_memory()
 
 
 
@@ -48,26 +64,24 @@ def _save_uploaded_files(uploaded_files: list) -> list[Path]:
 
 
 
+def _reset_chat() -> None:
+    st.session_state.messages = []
+    st.session_state.conversation_memory = create_memory()
+
+
+
 def _get_memory():
-    if "conversation_memory" not in st.session_state:
-        st.session_state.conversation_memory = create_memory()
     return st.session_state.conversation_memory
 
 
 
-def _reset_memory() -> None:
-    st.session_state.conversation_memory = create_memory()
-    st.session_state.chat_messages = []
-
-
-
 def _get_indexed_titles() -> list[str]:
-    return sorted([path.name for path in DATA_DIR.glob("*") if path.is_file()])
+    return sorted([path.name for path in DATA_DIR.glob("*") if path.is_file() and path.name != ".keep"])
 
 
 
-def _index_sources(file_paths: list[Path], wiki_topics: list[str]) -> int:
-    records = load_sources(file_paths, wiki_topics)
+def _index_sources(file_paths: list[Path]) -> int:
+    records = load_sources(file_paths, wiki_topics=[])
     if not records:
         return 0
 
@@ -86,11 +100,26 @@ def _load_store_from_disk():
 
 
 
+def _build_notices(route: str, use_web: bool, store) -> list[str]:
+    notices: list[str] = []
+    if not _get_indexed_titles() and route in {"document", "hybrid"}:
+        notices.append("The document folder is empty. Upload files and run indexing first.")
+    if store is None and route in {"document", "hybrid"}:
+        notices.append("FAISS index not found yet. Upload documents and click Index Documents.")
+    if use_web and route in {"web", "hybrid"} and not get_secret("TAVILY_API_KEY"):
+        notices.append("TAVILY_API_KEY is missing in Streamlit secrets, so web search is unavailable.")
+    if not get_secret("OPENAI_API_KEY"):
+        notices.append("OPENAI_API_KEY is missing in Streamlit secrets, so answer generation will be limited.")
+    return notices
+
+
+
 def _run_query(query: str, use_web: bool) -> dict[str, object]:
     store = _load_store_from_disk()
     memory = _get_memory()
     route = route_query(query)
     rewritten = rewrite_query(query)
+    notices = _build_notices(route, use_web, store)
 
     doc_hits = []
     if store and route in {"document", "hybrid"}:
@@ -98,7 +127,7 @@ def _run_query(query: str, use_web: bool) -> dict[str, object]:
         doc_hits = rerank_documents(rewritten["vector_query"], doc_hits, top_k=5)
 
     web_hits = []
-    if use_web and route in {"web", "hybrid"}:
+    if use_web and route in {"web", "hybrid"} and get_secret("TAVILY_API_KEY"):
         web_hits = search_web(rewritten["web_query"], top_k=5)
 
     payload = build_context(doc_hits, web_hits, route)
@@ -113,27 +142,89 @@ def _run_query(query: str, use_web: bool) -> dict[str, object]:
         "context": payload["context"],
         "summaries": summaries,
         "memory_text": load_memory_text(memory),
+        "notices": notices,
     }
 
 
 
-def _render_top_sources(summaries: list[dict[str, object]]) -> None:
-    st.subheader("Top Sources")
-    if not summaries:
-        st.caption("No document summaries available for this answer.")
-        return
+def _render_sidebar() -> tuple[list, bool, bool, bool]:
+    with st.sidebar:
+        st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
+        st.subheader("About")
+        st.markdown("**AI Advocate RAG Chatbot**")
+        st.write("This AI chatbot can:")
+        st.write("• Answer questions from uploaded documents")
+        st.write("• Search the web using Tavily")
+        st.write("• Provide responses with sources")
+        st.markdown("</div>", unsafe_allow_html=True)
 
-    for item in summaries:
-        score = item.get("similarity_score")
-        score_text = f" | FAISS score: {score:.4f}" if isinstance(score, float) else ""
-        st.markdown(f"**{item['title']}**{score_text}")
-        st.write(item["summary"])
+        st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
+        st.subheader("How to Use")
+        st.write("1. Upload PDF or TXT documents")
+        st.write("2. Wait for indexing to finish")
+        st.write("3. Ask questions in the chat")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
+        st.subheader("Uploaded Files")
+        if st.session_state.uploaded_files:
+            for file_name in st.session_state.uploaded_files:
+                st.write(f"- {file_name}")
+        else:
+            st.caption("No files uploaded yet")
+        st.markdown("</div>", unsafe_allow_html=True)
+
+        st.markdown('<div class="sidebar-section">', unsafe_allow_html=True)
+        st.subheader("Controls")
+        clear_chat = st.button("Clear Chat History", use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    main_col, _ = st.columns([5, 1])
+    with main_col:
+        st.title("AI Advocate RAG Chatbot")
+        st.caption("Chat with your documents using AI")
+
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.markdown("### Upload Documents")
+        uploaded_files = st.file_uploader(
+            "Upload Documents",
+            type=["pdf", "txt"],
+            accept_multiple_files=True,
+            help="Drag and drop PDF or TXT documents here.",
+            label_visibility="collapsed",
+        )
+        st.caption("Drag and drop PDF or TXT files here, then click Index Documents.")
+        use_web = st.toggle("Enable Web Search", value=True)
+        index_clicked = st.button("Index Documents", use_container_width=True)
+        st.markdown("</div>", unsafe_allow_html=True)
+
+    return uploaded_files or [], use_web, index_clicked, clear_chat
+
+
+
+def _render_chat_history() -> None:
+    st.markdown('<div class="chat-container">', unsafe_allow_html=True)
+    for message in st.session_state.messages:
+        avatar = "👤" if message["role"] == "user" else "🤖"
+        bubble_class = "chat-user" if message["role"] == "user" else "chat-ai"
+        with st.chat_message(message["role"], avatar=avatar):
+            st.markdown(
+                f'<div class="{bubble_class}">{message["content"]}</div>',
+                unsafe_allow_html=True,
+            )
+    st.markdown("</div>", unsafe_allow_html=True)
 
 
 
 def _render_doc_evidence(doc_evidence: list[dict[str, object]], summaries: list[dict[str, object]]) -> None:
-    _render_top_sources(summaries)
-    st.divider()
+    if summaries:
+        st.markdown("### Top Sources")
+        for item in summaries:
+            score = item.get("similarity_score")
+            score_text = f" | FAISS score: {score:.4f}" if isinstance(score, float) else ""
+            st.markdown(f"**{item['title']}**{score_text}")
+            st.write(item["summary"])
+        st.divider()
 
     if not doc_evidence:
         st.caption("No document evidence used.")
@@ -149,8 +240,6 @@ def _render_doc_evidence(doc_evidence: list[dict[str, object]], summaries: list[
             f"Chunk: {meta.get('chunk_index', 'n/a')} | "
             f"FAISS score: {score_text}"
         )
-        if "rerank_score" in meta:
-            st.caption(f"Rerank score: {meta['rerank_score']:.4f}")
         st.write(item["content"])
 
 
@@ -168,77 +257,82 @@ def _render_web_evidence(web_evidence: list[dict[str, object]]) -> None:
 
 
 
-def run_app() -> None:
-    ensure_dirs()
-    st.set_page_config(page_title="Hybrid RAG Search", layout="wide")
-    st.title("Hybrid Multi-Document RAG Search")
-    st.caption("Internal documents plus real-time web search in one chat flow.")
-
-    if "chat_messages" not in st.session_state:
-        st.session_state.chat_messages = []
-
-    with st.sidebar:
-        st.header("Sources")
-        uploaded_files = st.file_uploader(
-            "Upload documents",
-            type=["pdf", "txt", "md", "rst"],
-            accept_multiple_files=True,
-        )
-        wiki_input = st.text_area("Wikipedia topics", placeholder="One topic per line")
-        use_web = st.toggle("Enable Tavily search", value=True)
-
-        if st.button("Index sources", use_container_width=True):
-            file_paths = _save_uploaded_files(uploaded_files or [])
-            wiki_topics = [line.strip() for line in wiki_input.splitlines() if line.strip()]
-            chunk_count = _index_sources(file_paths, wiki_topics)
-            if chunk_count:
-                st.success(f"Indexed {chunk_count} chunks.")
-            else:
-                st.warning("No sources were indexed.")
-
-        if st.button("Reset chat", use_container_width=True):
-            _reset_memory()
-            st.success("Conversation memory cleared for this session.")
-
-        st.subheader("Indexed files")
-        indexed_titles = _get_indexed_titles()
-        if indexed_titles:
-            for title in indexed_titles:
-                st.write(f"- {title}")
-        else:
-            st.caption("No local files indexed yet.")
-
-    for message in st.session_state.chat_messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
-
-    query = st.chat_input("Ask about your documents, the web, or both")
-    if not query:
-        st.info("Upload files or add Wikipedia topics, then ask a question.")
+def _handle_indexing(uploaded_files: list) -> None:
+    if not uploaded_files:
+        st.warning("Please upload PDF or TXT documents before indexing.")
         return
 
-    st.session_state.chat_messages.append({"role": "user", "content": query})
-    with st.chat_message("user"):
-        st.markdown(query)
+    saved_paths = _save_uploaded_files(uploaded_files)
+    existing_names = list(st.session_state.uploaded_files)
+    for path in saved_paths:
+        if path.name not in existing_names:
+            existing_names.append(path.name)
+    st.session_state.uploaded_files = existing_names
+
+    chunk_count = _index_sources(saved_paths)
+    if chunk_count:
+        st.success(f"Indexed {chunk_count} chunks.")
+    else:
+        st.warning("No sources were indexed. Please upload PDF or TXT documents.")
+
+
+
+def run_app() -> None:
+    ensure_dirs()
+    _ensure_state()
+    st.set_page_config(page_title="AI Advocate RAG Chatbot", layout="wide")
+    _load_css()
+
+    uploaded_files, use_web, index_clicked, clear_chat = _render_sidebar()
+
+    if clear_chat:
+        _reset_chat()
+        st.success("Chat history cleared.")
+
+    if index_clicked:
+        _handle_indexing(uploaded_files)
+
+    chat_panel = st.container()
+    with chat_panel:
+        _render_chat_history()
+
+    query = st.chat_input("Ask a question about your documents...")
+    if not query:
+        return
+
+    if not st.session_state.uploaded_files:
+        st.warning("Please upload documents before asking questions.")
+        return
+
+    st.session_state.messages.append({"role": "user", "content": query})
+    with st.chat_message("user", avatar="👤"):
+        st.markdown(f'<div class="chat-user">{query}</div>', unsafe_allow_html=True)
 
     result = _run_query(query, use_web)
 
-    with st.chat_message("assistant"):
+    with st.chat_message("assistant", avatar="🤖"):
         st.markdown(result["route_label"])
         if result["rewritten"]["was_rewritten"]:
             st.caption(f"Rewritten query: {result['rewritten']['rewritten_query']}")
+        for notice in result["notices"]:
+            st.warning(notice)
+
+        thinking = st.empty()
+        bubble = st.empty()
+        thinking.markdown("Thinking...")
+        answer_text = ""
+        for chunk in stream_answer(query, result["context"], result["memory_text"]):
+            answer_text += chunk
+            bubble.markdown(f'<div class="chat-ai">{answer_text}</div>', unsafe_allow_html=True)
+        thinking.empty()
 
         answer_tab, doc_tab, web_tab = st.tabs(["Answer", "Document Evidence", "Web Evidence"])
         with answer_tab:
-            answer = st.write_stream(
-                stream_answer(query, result["context"], result["memory_text"])
-            )
-
+            st.markdown(f'<div class="chat-ai">{answer_text}</div>', unsafe_allow_html=True)
         with doc_tab:
             _render_doc_evidence(result["doc_evidence"], result["summaries"])
-
         with web_tab:
             _render_web_evidence(result["web_evidence"])
 
-    save_turn(_get_memory(), query, answer)
-    st.session_state.chat_messages.append({"role": "assistant", "content": answer})
+    save_turn(_get_memory(), query, answer_text)
+    st.session_state.messages.append({"role": "assistant", "content": answer_text})
