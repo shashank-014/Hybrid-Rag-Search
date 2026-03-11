@@ -1,4 +1,4 @@
-from langchain.memory import ConversationBufferMemory
+from langchain_community.memory import ConversationBufferMemory
 
 
 
