@@ -1,16 +1,21 @@
 import os
 import streamlit as st
+
 from langchain_groq import ChatGroq
+from langchain_core.messages import SystemMessage, HumanMessage
 
-os.environ["GROQ_API_KEY"] = st.secrets["GROQ_API_KEY"]
+api_key = st.secrets.get("GROQ_API_KEY")
+
+if api_key:
+    os.environ["GROQ_API_KEY"] = api_key
 
 
 
-def build_messages(query, context, memory_text):
+def _build_messages(query, context, memory_text):
     system_prompt = f"""
 You are a helpful AI assistant.
 
-Use the provided context to answer the question.
+Use the provided context to answer the user's question.
 
 Context:
 {context}
@@ -18,17 +23,17 @@ Context:
 Conversation History:
 {memory_text}
 
-If the answer is not found in the context, say you don't know.
+If the answer is not present in the context, say you do not know.
 """
     return [
-        {"role": "system", "content": system_prompt},
-        {"role": "user", "content": query}
+        SystemMessage(content=system_prompt),
+        HumanMessage(content=query)
     ]
 
 
 
 def stream_answer(query, context, memory_text):
-    if "GROQ_API_KEY" not in st.secrets:
+    if not api_key:
         yield "GROQ_API_KEY is missing in Streamlit secrets."
         return
 
@@ -36,7 +41,7 @@ def stream_answer(query, context, memory_text):
         yield "I could not find enough evidence to answer that question yet."
         return
 
-    messages = build_messages(query, context, memory_text)
+    messages = _build_messages(query, context, memory_text)
 
     llm = ChatGroq(
         model="llama3-8b-8192",
@@ -47,7 +52,7 @@ def stream_answer(query, context, memory_text):
 
     answer_text = response.content
 
-    # simulate streaming
+    # simulate streaming for Streamlit UI
     for word in answer_text.split():
         yield word + " "
 
