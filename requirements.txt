@@ -1,9 +1,10 @@
+streamlit
 langchain
 langchain-community
 langchain-openai
-faiss-cpu
+langchain-text-splitters
 sentence-transformers
-streamlit
+faiss-cpu
 tavily-python
 pypdf
 wikipedia
