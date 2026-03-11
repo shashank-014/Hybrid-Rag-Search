@@ -10,6 +10,7 @@ if api_key:
 
 MAX_CONTEXT_CHARS = 2600
 MAX_MEMORY_CHARS = 800
+GROQ_MODEL = "llama-3.1-8b-instant"
 
 
 
@@ -48,7 +49,7 @@ If the answer is not present in the context, say you do not know.
 def _run_completion(messages):
     client = Groq(api_key=api_key)
     response = client.chat.completions.create(
-        model="llama3-8b-8192",
+        model=GROQ_MODEL,
         messages=messages,
         temperature=0.2,
     )
